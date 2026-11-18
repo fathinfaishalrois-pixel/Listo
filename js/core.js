@@ -489,11 +489,174 @@
     };
   })();
 
+  /* ---------------------------------------------------------- project state
+     One shared source of truth for the guided direction workflow, Color
+     Explorer, Composition Studio, review and exports. Everything is local. */
+  const Project = (() => {
+    const KEY = 'listo-project';
+    const SAVED = 'listo-project-saves';
+    const PALETTE_FALLBACK = ['#101532', '#28306B', '#6D5CE8', '#9277F2', '#CDC5FF'];
+    const hex = v => Color.hexToRgb(v) ? String(v).toUpperCase() : null;
+    const deep = o => JSON.parse(JSON.stringify(o));
+    const now = () => Date.now();
+
+    function bootstrap() {
+      const ex = store.getJSON('listo-explorer', {}) || {};
+      const studio = store.getJSON('listo-studio', {}) || {};
+      const bp = store.getJSON('listo-direction', {}) || {};
+      const ab = Array.isArray(studio.artboards) && studio.artboards[0] ? studio.artboards[0] : null;
+      const core = hex(ex.core) || '#6D5CE8';
+      const harmony = typeof ex.harmony === 'string' ? ex.harmony : 'Analogous';
+      return {
+        version: 1, id: uid(), title: bp.title || 'Untitled Direction',
+        mood: bp.mood || '', notes: bp.compositionNotes || '',
+        color: {
+          core, harmony,
+          palette: Array.isArray(ex.palette) ? ex.palette : Color.harmonyHexes(Color.hexToHsv(core), harmony),
+          locks: Array.isArray(ex.locks) ? ex.locks : [false, false, false, false, false],
+          mood: 'Analogous'
+        },
+        composition: ab ? {
+          artboardId: ab.id || null, name: ab.name || 'Direction Artboard',
+          width: ab.w || 1080, height: ab.h || 1350, unit: ab.unit || 'px',
+          dpi: ab.dpi || 300, ratioLock: !!ab.ratioLock, background: ab.bg || '#10162B',
+          margin: ab.margin || 0, bleed: ab.bleed || 0, safe: !!ab.safe, grid: false,
+          guides: Array.isArray(ab.guides) ? ab.guides.map(g => g.preset).filter(Boolean) : ['thirds']
+        } : {
+          artboardId: null, name: 'Direction Artboard', width: 1080, height: 1350,
+          unit: 'px', dpi: 300, ratioLock: true, background: '#10162B',
+          margin: 0, bleed: 0, safe: true, grid: false, guides: ['thirds']
+        }
+      };
+    }
+
+    function normalize(raw) {
+      const base = raw && typeof raw === 'object' ? raw : bootstrap();
+      const c = base.color && typeof base.color === 'object' ? base.color : {};
+      const comp = base.composition && typeof base.composition === 'object' ? base.composition : {};
+      const core = hex(c.core) || '#6D5CE8';
+      const harmony = typeof c.harmony === 'string' ? c.harmony : 'Analogous';
+      let palette = Array.isArray(c.palette) ? c.palette.map(hex).filter(Boolean) : null;
+      if (!palette || palette.length !== 5) {
+        palette = Color.harmonyHexes(Color.hexToHsv(core), harmony);
+        if (!palette || palette.length !== 5) palette = PALETTE_FALLBACK.slice();
+      }
+      const locks = Array.isArray(c.locks) && c.locks.length === 5 ? c.locks.map(Boolean) : [false, false, false, false, false];
+      const width = clamp(Number(comp.width) || 1080, 16, 20000);
+      const height = clamp(Number(comp.height) || 1350, 16, 20000);
+      const guides = Array.isArray(comp.guides) ? comp.guides.filter(g => typeof g === 'string').slice(0, 12) : ['thirds'];
+      return {
+        version: 1,
+        id: typeof base.id === 'string' ? base.id : uid(),
+        title: String(base.title || 'Untitled Direction').slice(0, 80),
+        mood: String(base.mood || '').slice(0, 60),
+        notes: String(base.notes || '').slice(0, 1200),
+        color: {
+          core, harmony, palette, locks,
+          mood: String(c.mood || 'Custom').slice(0, 40)
+        },
+        composition: {
+          artboardId: comp.artboardId || null,
+          name: String(comp.name || 'Direction Artboard').slice(0, 48),
+          width: Math.round(width), height: Math.round(height),
+          unit: ['px', 'mm', 'cm', 'in'].includes(comp.unit) ? comp.unit : 'px',
+          dpi: clamp(Number(comp.dpi) || 300, 24, 1200),
+          ratioLock: comp.ratioLock !== false,
+          background: hex(comp.background) || '#10162B',
+          margin: clamp(Number(comp.margin) || 0, 0, 2000),
+          bleed: clamp(Number(comp.bleed) || 0, 0, 20),
+          safe: comp.safe !== false,
+          grid: !!comp.grid,
+          guides
+        },
+        updatedAt: Number(base.updatedAt) || now()
+      };
+    }
+
+    let current = normalize(store.getJSON(KEY, null));
+    let saveT;
+    function queueSave() {
+      clearTimeout(saveT);
+      saveT = setTimeout(() => store.setJSON(KEY, current), 220);
+    }
+    queueSave();
+
+    function emit(source, patch) {
+      document.dispatchEvent(new CustomEvent('listo:project', {
+        detail: { project: current, source: source || 'app', patch: patch || null }
+      }));
+    }
+
+    function get() { return current; }
+
+    function update(patch, source) {
+      if (!patch || typeof patch !== 'object') return current;
+      const next = Object.assign({}, current);
+      if (patch.color) next.color = Object.assign({}, current.color, patch.color);
+      if (patch.composition) next.composition = Object.assign({}, current.composition, patch.composition);
+      Object.keys(patch).forEach(k => { if (k !== 'color' && k !== 'composition') next[k] = patch[k]; });
+      current = normalize(next);
+      current.updatedAt = now();
+      queueSave();
+      emit(source, patch);
+      return current;
+    }
+
+    function replace(state, source) {
+      current = normalize(Object.assign({}, state, { updatedAt: now() }));
+      queueSave();
+      emit(source || 'replace', null);
+      return current;
+    }
+
+    function reset() {
+      const next = bootstrap();
+      next.id = uid();
+      next.title = 'Untitled Direction';
+      next.mood = '';
+      next.notes = '';
+      current = normalize(next);
+      current.updatedAt = now();
+      queueSave();
+      emit('reset', null);
+      return current;
+    }
+
+    function savedList() {
+      const arr = store.getJSON(SAVED, []);
+      return Array.isArray(arr) ? arr.filter(x => x && x.project) : [];
+    }
+    function save(name) {
+      const arr = savedList();
+      const label = String(name || current.title || 'Untitled Direction').slice(0, 60);
+      const snap = { id: uid(), name: label, ts: now(), project: deep(current) };
+      arr.unshift(snap);
+      store.setJSON(SAVED, arr.slice(0, 24));
+      return snap;
+    }
+    function open(id) {
+      const found = savedList().find(x => x.id === id);
+      if (!found) return null;
+      current = normalize(Object.assign({}, found.project, { id: uid(), updatedAt: now() }));
+      queueSave();
+      emit('open', null);
+      return current;
+    }
+    function removeSaved(id) {
+      store.setJSON(SAVED, savedList().filter(x => x.id !== id));
+      return true;
+    }
+    function flush() { clearTimeout(saveT); store.setJSON(KEY, current); }
+    function ratioText() { return Color.ratioText(current.composition.width, current.composition.height); }
+
+    return { get, update, replace, reset, save, open, listSaved: savedList, removeSaved, flush, ratioText, normalize, bootstrap };
+  })();
+
   /* ------------------------------------------------------------------ router
-     Hash routes: #home (default), #colors, #studio, #references.
+     Hash routes: #home (default), #colors, #studio, #references, #direction.
      Views are full-screen fixed layers; home scroll position is preserved. */
   const Router = (() => {
-    const ROUTES = ['colors', 'studio', 'references'];
+    const ROUTES = ['colors', 'studio', 'references', 'direction'];
     const hooks = {};           // route -> { init }
     const inited = new Set();
     let current = 'home';
@@ -508,7 +671,7 @@
       const body = document.body;
       $$('.view').forEach(v => v.classList.remove('open'));
       if (route === 'home') {
-        body.classList.remove('view-open', 'view-colors', 'view-studio', 'view-references');
+        body.classList.remove('view-open', 'view-colors', 'view-studio', 'view-references', 'view-direction');
         ROUTES.forEach(r => { const el = viewEl(r); if (el) { el.hidden = true; el.setAttribute('aria-hidden', 'true'); } });
         savedScroll = clamp(savedScroll, 0, 1e7);
         document.documentElement.style.scrollBehavior = 'auto';
@@ -524,9 +687,9 @@
           if (r === route) {
             el.hidden = false;
             el.setAttribute('aria-hidden', 'false');
-            if (!inited.has(r)) {
+            if (!inited.has(r) && hooks[r] && typeof hooks[r].init === 'function') {
               inited.add(r);
-              try { (hooks[r] && hooks[r].init || (() => {}))(); } catch (e) { console.error('[LISTO] init failed for ' + r, e); }
+              try { hooks[r].init(); } catch (e) { console.error('[LISTO] init failed for ' + r, e); }
             }
             raf(() => el.classList.add('open'));
           } else {
@@ -535,7 +698,7 @@
         });
         const crumb = $('#viewCrumb');
         if (crumb) {
-          const names = { colors: 'COLOR EXPLORER', studio: 'COMPOSITION STUDIO', references: 'VISUAL REFERENCES' };
+          const names = { colors: 'COLOR EXPLORER', studio: 'COMPOSITION STUDIO', references: 'VISUAL REFERENCES', direction: 'GUIDED DIRECTION' };
           crumb.textContent = names[route] || '';
         }
       }
@@ -592,7 +755,14 @@
 
     return {
       init, go,
-      register(route, hook) { hooks[route] = hook || {}; },
+      register(route, hook) {
+        hooks[route] = hook || {};
+        // A direct hash load can activate a view before its module script registers.
+        if (current === route && !inited.has(route) && typeof hooks[route].init === 'function') {
+          inited.add(route);
+          try { hooks[route].init(); } catch (e) { console.error('[LISTO] init failed for ' + route, e); }
+        }
+      },
       get current() { return current; }
     };
   })();
@@ -689,7 +859,7 @@
   /* ---------------------------------------------------------------- exports */
   const LISTO = {
     reduceMotion, finePointer, $, $$, clamp, uid, raf,
-    store, Sound, toast, copyText, download, Projects, IDB, Color, Router
+    store, Sound, toast, copyText, download, Projects, Project, IDB, Color, Router
   };
   window.LISTO = LISTO;
 
@@ -699,5 +869,9 @@
     Router.init();
     document.dispatchEvent(new CustomEvent('listo:ready'));
   }
-  boot();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
 })();

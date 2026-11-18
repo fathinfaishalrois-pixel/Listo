@@ -5,12 +5,12 @@
    ========================================================================== */
 (() => {
   'use strict';
-  const { $, $$, clamp, raf, store, Sound, toast, copyText, download, Color, Router, Projects } = window.LISTO;
+  const { $, $$, clamp, raf, store, Sound, toast, copyText, download, Color, Router, Projects, Project } = window.LISTO;
   const view = $('#view-colors');
   if (!view) return;
 
   /* ------------------------------------------------------------------ state */
-  const DEFAULTS = { core: '#6D5CE8', harmony: 'Analogous', palette: null, locks: [false, false, false, false, false], preview: 'gradient' };
+  const DEFAULTS = { core: '#6D5CE8', harmony: 'Analogous', palette: null, locks: [false, false, false, false, false], preview: 'gradient', mood: 'Custom' };
   let state = Object.assign({}, DEFAULTS, store.getJSON('listo-explorer', {}));
   if (!Array.isArray(state.locks) || state.locks.length !== 5) state.locks = [false, false, false, false, false];
   if (!Array.isArray(state.palette) || state.palette.length !== 5) state.palette = null;
@@ -26,6 +26,16 @@
   const persist = () => {
     clearTimeout(saveT);
     saveT = setTimeout(() => store.setJSON('listo-explorer', state), 400);
+    // Keep the shared project state in sync without waiting for the debounce.
+    Project.update({
+      color: {
+        core: state.core,
+        harmony: state.harmony,
+        palette: [...(state.palette || [])],
+        locks: [...state.locks],
+        mood: state.mood || 'Custom'
+      }
+    }, 'explorer');
   };
 
   const coreHsv = () => Color.hexToHsv(state.core);
@@ -178,37 +188,45 @@
     const row = $('#paletteRow');
     if (!row) return;
     row.innerHTML = (state.palette || []).map((hex, i) => `
-      <button class="pal-swatch ${i === sel ? 'selected' : ''} ${state.locks[i] ? 'locked' : ''}"
-              style="background:${hex}" data-i="${i}" role="button"
-              aria-label="Color ${i + 1} ${hex} — click to copy, lock button keeps it">
-        <span class="sw-hex">${hex}</span>
-        <span class="sw-lock" data-lock="${i}" role="button" tabindex="0"
-              aria-pressed="${state.locks[i]}" aria-label="${state.locks[i] ? 'Unlock' : 'Lock'} color ${i + 1}">
-              ${state.locks[i] ? '🔒' : '🔓'}</span>
-      </button>`).join('');
-    $$('.pal-swatch', row).forEach(el => {
+      <div class="pal-item ${state.locks[i] ? 'locked' : ''}">
+        <button type="button" class="pal-swatch ${i === sel ? 'selected' : ''}" style="background:${hex}" data-i="${i}" aria-label="Set ${hex} as core color">
+          <span class="sw-hex">${hex}</span>
+        </button>
+        <button type="button" class="sw-lock" data-lock="${i}" aria-pressed="${state.locks[i]}" aria-label="${state.locks[i] ? 'Unlock' : 'Lock'} color ${i + 1}">${state.locks[i] ? '🔒' : '🔓'}</button>
+        <button type="button" class="sw-edit" data-edit="${i}" aria-label="Edit color ${i + 1}" title="Edit this color">✎</button>
+        <input class="sw-color-input" type="color" data-edit-color="${i}" value="${hex}" tabindex="-1" aria-label="Custom color ${i + 1}">
+      </div>`).join('');
+
+    row.querySelectorAll('[data-i]').forEach(el => el.addEventListener('click', () => {
       const i = Number(el.dataset.i);
-      el.addEventListener('click', e => {
-        if (e.target.closest('.sw-lock')) return;
-        sel = i;
-        copyText(state.palette[i], state.palette[i] + ' copied');
-        setCore(state.palette[i], { push: false });
-        renderAll();
-      });
-    });
-    $$('.sw-lock', row).forEach(lb => {
-      const i = Number(lb.dataset.lock);
-      const act = e => {
-        e.stopPropagation();
-        state.locks[i] = !state.locks[i];
-        persist();
-        Sound.play('lock');
-        toast(state.locks[i] ? 'Color ' + (i + 1) + ' locked' : 'Color ' + (i + 1) + ' unlocked');
-        renderPaletteRow();
-      };
-      lb.addEventListener('click', act);
-      lb.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(e); } });
-    });
+      sel = i;
+      setCore(state.palette[i], { push: false });
+      renderAll();
+    }));
+    row.querySelectorAll('[data-lock]').forEach(el => el.addEventListener('click', e => {
+      e.stopPropagation();
+      const i = Number(el.dataset.lock);
+      state.locks[i] = !state.locks[i];
+      persist();
+      Sound.play('lock');
+      toast(state.locks[i] ? `Color ${i + 1} locked` : `Color ${i + 1} unlocked`);
+      renderAll();
+    }));
+    row.querySelectorAll('[data-edit]').forEach(el => el.addEventListener('click', () => {
+      const input = row.querySelector(`[data-edit-color="${el.dataset.edit}"]`);
+      if (!input) return;
+      try { if (typeof input.showPicker === 'function') input.showPicker(); else input.click(); }
+      catch (_) { input.click(); }
+    }));
+    row.querySelectorAll('[data-edit-color]').forEach(input => input.addEventListener('change', () => {
+      const i = Number(input.dataset.editColor), color = input.value.toUpperCase();
+      if (!Number.isInteger(i) || i < 0 || i >= state.palette.length) return;
+      state.palette[i] = color;
+      state.locks[i] = true; // A manually edited swatch stays intact on regeneration.
+      if (i === sel) state.core = color;
+      persist();
+      renderAll();
+    }));
   }
 
   function renderReadout() {
@@ -412,6 +430,7 @@
       pushHistory();
       state.palette = pal.map((hex, i) => state.locks[i] ? state.palette[i] : hex);
       state.core = pal[2];
+      state.mood = chip.dataset.mood;
       persist();
       Sound.play('generate');
       toast(chip.dataset.mood + ' mood applied', 'success');
@@ -820,6 +839,21 @@
     renderSaved();
     persist();
   }
+
+  /* ------------------------------------------------- shared project bridge */
+  document.addEventListener('listo:project', e => {
+    const detail = e.detail || {};
+    if (detail.source === 'explorer' || !detail.project || !detail.project.color) return;
+    const c = detail.project.color;
+    if (!Color.hexToRgb(c.core) || !Array.isArray(c.palette) || c.palette.length !== 5) return;
+    state.core = c.core;
+    state.harmony = c.harmony || state.harmony;
+    state.palette = [...c.palette];
+    state.locks = Array.isArray(c.locks) && c.locks.length === 5 ? [...c.locks] : state.locks;
+    state.mood = c.mood || state.mood;
+    store.setJSON('listo-explorer', state);
+    if (inited) renderAll();
+  });
 
   Router.register('colors', { init });
   document.addEventListener('listo:view', e => {

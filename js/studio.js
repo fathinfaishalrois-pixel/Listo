@@ -1,12 +1,12 @@
 /* ==========================================================================
    LISTO. — studio.js
-   Composition Studio: infinite canvas, multiple artboards, realtime
+   Composition Studio: infinite canvas, one resizable artboard, realtime
    dimensions, composition library, guide controls, reference overlays,
-   minimap, focus/compare, persistence and exports.
+   minimap, focus mode, persistence and exports.
    ========================================================================== */
 (() => {
   'use strict';
-  const { $, $$, clamp, uid, raf, store, Sound, toast, download, Color, Router, IDB, Projects } = window.LISTO;
+  const { $, $$, clamp, uid, raf, store, Sound, toast, download, Color, Router, IDB, Projects, Project } = window.LISTO;
   const view = $('#view-studio');
   if (!view) return;
 
@@ -234,35 +234,39 @@
   }
   function seedState() {
     const t = makeGuide('thirds');
-    const sp = makeGuide('golden-spiral');
-    const mg = makeGuide('modular');
     return {
       camera: { x: -160, y: -160, zoom: .28 },
       snap: true, minimap: true,
-      artboards: [
-        mkArtboard({ name: 'Story 4:5', x: 0, y: 0, w: 1080, h: 1350, bg: '#10162B', guides: [t] }),
-        mkArtboard({ name: 'Landscape 16:9', x: 1260, y: 0, w: 1920, h: 1080, bg: '#0E1A26', guides: [sp] }),
-        mkArtboard({ name: 'A4 Print', x: 0, y: 1530, w: Math.round(210 * MM(300)), h: Math.round(297 * MM(300)), bg: '#F4F1EA', dpi: 300, unit: 'mm', bleed: 3, margin: 15, safe: true, guides: [mg] })
-      ]
+      // LISTO uses one freely-resizable working artboard, not a multi-board editor.
+      artboards: [mkArtboard({ name: 'My Artboard', x: 0, y: 0, w: 1080, h: 1350, bg: '#10162B', guides: [t] })]
     };
   }
 
   let state = store.getJSON('listo-studio', null);
   if (!state || !Array.isArray(state.artboards) || !state.artboards.length) state = seedState();
   state.artboards = state.artboards.map(a => mkArtboard(a));
+  // Migrate old multi-artboard workspaces safely: preserve a local backup and
+  // keep the first existing board as the single active artboard.
+  if (state.artboards.length > 1) {
+    if (!store.get('listo-studio-migration-v1', '')) {
+      store.setJSON('listo-studio-legacy-backup', state);
+      store.set('listo-studio-migration-v1', 'done');
+    }
+    state.artboards = [state.artboards[0]];
+  }
   if (!state.camera || !Number.isFinite(state.camera.zoom)) state.camera = { x: -160, y: -160, zoom: .28 };
   if (typeof state.snap !== 'boolean') state.snap = true;
   if (typeof state.minimap !== 'boolean') state.minimap = true;
 
   let selectedId = null;
-  let lastSelIds = [];
   let undoStack = [];
   const refUrls = new Map();   // refId -> objectURL (session)
 
   let saveT;
-  function persist() {
+  function persist(ab) {
     clearTimeout(saveT);
     saveT = setTimeout(() => store.setJSON('listo-studio', state), 500);
+    publishProject(ab || selAb());
   }
   function saveNow(manual) {
     store.setJSON('listo-studio', state);
@@ -294,6 +298,51 @@
   }
 
   const selAb = () => state.artboards.find(a => a.id === selectedId) || null;
+
+  /* ---------------------------------------------- shared direction project */
+  function publishProject(ab) {
+    if (!ab || !Project) return;
+    Project.update({
+      composition: {
+        artboardId: ab.id,
+        name: ab.name,
+        width: ab.w,
+        height: ab.h,
+        unit: ab.unit,
+        dpi: ab.dpi,
+        ratioLock: !!ab.ratioLock,
+        background: ab.bg,
+        margin: ab.margin || 0,
+        bleed: ab.bleed || 0,
+        safe: !!ab.safe,
+        guides: Array.isArray(ab.guides) ? ab.guides.map(g => g.preset).filter(Boolean) : []
+      }
+    }, 'studio');
+  }
+
+  function applyProject(comp, opts = {}) {
+    if (!comp || !state.artboards.length) return;
+    const ab = state.artboards.find(a => a.id === comp.artboardId) || selAb() || state.artboards[0];
+    if (!ab) return;
+    ab.w = clamp(Number(comp.width) || ab.w, 16, 20000);
+    ab.h = clamp(Number(comp.height) || ab.h, 16, 20000);
+    if (['px', 'mm', 'cm', 'in'].includes(comp.unit)) ab.unit = comp.unit;
+    ab.dpi = clamp(Number(comp.dpi) || ab.dpi, 24, 1200);
+    if (Color.hexToRgb(comp.background)) ab.bg = comp.background;
+    ab.margin = clamp(Number(comp.margin) || 0, 0, 2000);
+    ab.bleed = clamp(Number(comp.bleed) || 0, 0, 20);
+    ab.safe = comp.safe !== false;
+    ab.ratioLock = comp.ratioLock !== false;
+    if (opts.guides && Array.isArray(comp.guides)) {
+      ab.guides = comp.guides.filter(id => GUIDE_DEFS[id]).slice(0, 12).map(id => makeGuide(id));
+    }
+    if (opts.select) selectedId = ab.id;
+    if (inited) {
+      refreshAb(ab);
+      if (selectedId === ab.id) { syncInspector(); syncGuides(); }
+      persist(ab);
+    }
+  }
 
   /* =============================================================== CAMERA */
   function applyTransform() {
@@ -360,14 +409,20 @@
         <span class="ab-name" title="Double-click to rename">${escapeHtml(ab.name)}</span>
         <span class="ab-dims">${dimLabel(ab)}</span>
         <button class="chip-btn" data-act="rename" aria-label="Rename artboard" title="Rename">✎</button>
-        <button class="chip-btn" data-act="dup" aria-label="Duplicate artboard" title="Duplicate">⧉</button>
-        <button class="chip-btn" data-act="del" aria-label="Delete artboard" title="Delete">×</button>
       </div>
       <div class="ab-frame" style="background:${ab.bg}">
         ${overlays(ab)}
         <div class="ab-guides">${ab.guides.map(g => guideSvgEl(ab, g)).join('')}</div>
         ${refMarkup(ab)}
-      </div>`;
+      </div>
+      <button type="button" class="ab-resize-handle nw" data-resize="nw" aria-label="Resize artboard from top left"></button>
+      <button type="button" class="ab-resize-handle n" data-resize="n" aria-label="Resize artboard from top"></button>
+      <button type="button" class="ab-resize-handle ne" data-resize="ne" aria-label="Resize artboard from top right"></button>
+      <button type="button" class="ab-resize-handle e" data-resize="e" aria-label="Resize artboard from right"></button>
+      <button type="button" class="ab-resize-handle se" data-resize="se" aria-label="Resize artboard from bottom right"></button>
+      <button type="button" class="ab-resize-handle s" data-resize="s" aria-label="Resize artboard from bottom"></button>
+      <button type="button" class="ab-resize-handle sw" data-resize="sw" aria-label="Resize artboard from bottom left"></button>
+      <button type="button" class="ab-resize-handle w" data-resize="w" aria-label="Resize artboard from left"></button>`;
     return el;
   }
   function dimLabel(ab) {
@@ -431,6 +486,7 @@
   const pointers = new Map();
   let mode = null; // 'pan' | 'move' | 'pinch'
   let moveStart = null;
+  let resizeStart = null;
   let pinchStart = null;
 
   function screenToWorldPoint(clientX, clientY) {
@@ -446,6 +502,22 @@
     const chipBtn = e.target.closest('.chip-btn');
     const chipName = e.target.closest('.ab-name');
     if (chipBtn || (chipName && chipName.querySelector('input'))) return; // let clicks work
+    const resizeHandle = e.target.closest('.ab-resize-handle');
+    if (resizeHandle) {
+      const abEl = resizeHandle.closest('.ab');
+      const ab = abEl && state.artboards.find(a => a.id === abEl.dataset.id);
+      if (!ab) return;
+      selectedId = ab.id;
+      renderSelection();
+      syncInspector(); syncGuides();
+      resizeStart = { id: ab.id, dir: resizeHandle.dataset.resize, x: e.clientX, y: e.clientY, w: ab.w, h: ab.h, snapshot: JSON.stringify(state.artboards) };
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, prev: { x: e.clientX, y: e.clientY } });
+      mode = 'resize';
+      vp.classList.add('resizing-ab');
+      vp.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, prev: { x: e.clientX, y: e.clientY } });
     if (pointers.size === 2) {
       mode = 'pinch';
@@ -460,7 +532,6 @@
       if (!ab) return;
       if (selectedId !== ab.id) {
         selectedId = ab.id;
-        noteSelection(ab.id);
         Sound.play('select');
         renderSelection();
         syncInspector(); syncGuides();
@@ -499,6 +570,36 @@
       applyTransform();
       return;
     }
+    if (mode === 'resize' && resizeStart) {
+      const ab = state.artboards.find(a => a.id === resizeStart.id);
+      if (!ab) return;
+      const dx = (e.clientX - resizeStart.x) / state.camera.zoom;
+      const dy = (e.clientY - resizeStart.y) / state.camera.zoom;
+      const dir = resizeStart.dir;
+      let w = resizeStart.w, h = resizeStart.h;
+      if (dir.includes('e')) w += dx;
+      if (dir.includes('w')) w -= dx;
+      if (dir.includes('s')) h += dy;
+      if (dir.includes('n')) h -= dy;
+      w = clamp(w, 16, 20000); h = clamp(h, 16, 20000);
+      if (ab.ratioLock) {
+        const originalRatio = resizeStart.w / resizeStart.h;
+        if (Math.abs(dx) >= Math.abs(dy)) h = w / originalRatio;
+        else w = h * originalRatio;
+      }
+      ab.w = Math.round(clamp(w, 16, 20000));
+      ab.h = Math.round(clamp(h, 16, 20000));
+      refreshAb(ab);
+      const el = world.querySelector(`.ab[data-id="${ab.id}"]`);
+      const dim = el && el.querySelector('.ab-dims');
+      if (dim) dim.textContent = dimLabel(ab);
+      if (insp.abW) insp.abW.value = toUnit(ab, ab.w);
+      if (insp.abH) insp.abH.value = toUnit(ab, ab.h);
+      if (insp.abRatio) insp.abRatio.textContent = Color.ratioText(ab.w, ab.h);
+      scheduleMinimap();
+      fadeHint();
+      return;
+    }
     if (mode === 'pan') {
       state.camera.x -= (p.x - p.prev.x) / state.camera.zoom;
       state.camera.y -= (p.y - p.prev.y) / state.camera.zoom;
@@ -528,6 +629,14 @@
 
   function endPointer(e) {
     pointers.delete(e.pointerId);
+    if (mode === 'resize' && resizeStart) {
+      if (resizeStart.snapshot) undoStack.push(JSON.stringify({ camera: state.camera, artboards: JSON.parse(resizeStart.snapshot), snap: state.snap }));
+      if (undoStack.length > 25) undoStack.shift();
+      resizeStart = null;
+      vp.classList.remove('resizing-ab');
+      persist();
+      scheduleMinimap();
+    }
     if (mode === 'move' && moveStart) {
       const ab = state.artboards.find(a => a.id === moveStart.id);
       if (ab && (ab.x !== undefined)) {
@@ -546,6 +655,20 @@
   }
   vp.addEventListener('pointerup', endPointer);
   vp.addEventListener('pointercancel', endPointer);
+  vp.addEventListener('keydown', e => {
+    const handle = e.target.closest('.ab-resize-handle');
+    if (!handle || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+    const ab = selAb(); if (!ab) return;
+    const step = e.shiftKey ? 10 : 1, dir = handle.dataset.resize;
+    let w = ab.w, h = ab.h;
+    if (e.key === 'ArrowRight' && (dir.includes('e') || dir === 'n' || dir === 's')) w += step;
+    if (e.key === 'ArrowLeft' && (dir.includes('e') || dir === 'n' || dir === 's')) w = Math.max(16, w - step);
+    if (e.key === 'ArrowDown' && (dir.includes('s') || dir === 'e' || dir === 'w')) h += step;
+    if (e.key === 'ArrowUp' && (dir.includes('s') || dir === 'e' || dir === 'w')) h = Math.max(16, h - step);
+    if (ab.ratioLock) { const r = ab.w / ab.h; if (w !== ab.w) h = Math.round(w / r); else if (h !== ab.h) w = Math.round(h * r); }
+    ab.w = clamp(Math.round(w),16,20000); ab.h = clamp(Math.round(h),16,20000);
+    refreshAb(ab); syncInspector(); persist(); e.preventDefault();
+  });
 
   vp.addEventListener('wheel', e => {
     e.preventDefault();
@@ -563,11 +686,9 @@
     }
   }, { passive: false });
 
-  vp.addEventListener('dblclick', e => {
-    if (e.target.closest('.ab') || e.target.closest('.ab-chip')) return;
-    const wpt = screenToWorldPoint(e.clientX, e.clientY);
-    createArtboard({ x: Math.round(wpt.x - 540), y: Math.round(wpt.y - 675) });
-  });
+  // The canvas intentionally contains one artboard. Double-clicking empty
+  // space no longer creates extra boards; it remains available for panning.
+  vp.addEventListener('dblclick', e => { if (e.target.closest('.ab-name')) startRename(selAb()); });
 
   // keyboard
   vp.addEventListener('keydown', e => {
@@ -582,18 +703,12 @@
       case '+': case '=': zoomAt(vp.clientWidth / 2, vp.clientHeight / 2, 1.25); break;
       case '-': zoomAt(vp.clientWidth / 2, vp.clientHeight / 2, .8); break;
       case '0': fitAll(); break;
-      case 'n': case 'N': createArtboard(); break;
       case 'f': case 'F': toggleFocus(); break;
-      case 'c': case 'C': compareMode(); break;
-      case 'Delete': case 'Backspace': deleteSelected(); break;
       default: handled = false;
     }
     if (handled) { e.preventDefault(); applyTransform(); persist(); }
   });
 
-  function noteSelection(id) {
-    lastSelIds = [id, ...lastSelIds.filter(x => x !== id)].slice(0, 2);
-  }
   function renderSelection() {
     $$('.ab', world).forEach(el => el.classList.toggle('sel', el.dataset.id === selectedId));
   }
@@ -696,50 +811,6 @@
   }
 
   /* ================================================================ ACTIONS */
-  function createArtboard(pos) {
-    pushUndo();
-    const last = state.artboards[state.artboards.length - 1];
-    const w = last ? last.w : 1080, h = last ? last.h : 1350;
-    const i = state.artboards.length;
-    const ab = mkArtboard({
-      name: 'Artboard ' + (i + 1),
-      x: pos ? pos.x : Math.round(i * 80), y: pos ? pos.y : Math.round(i * 80),
-      w, h, bg: last ? last.bg : '#10162B', dpi: last ? last.dpi : 300
-    });
-    state.artboards.push(ab);
-    selectedId = ab.id;
-    noteSelection(ab.id);
-    Sound.play('create');
-    toast(ab.name + ' created', 'success');
-    renderWorld(); syncInspector(); syncGuides(); fitSelected(); persist();
-  }
-  function duplicateSelected() {
-    const ab = selAb();
-    if (!ab) { toast('Select an artboard first'); return; }
-    pushUndo();
-    const copy = mkArtboard(Object.assign({}, ab, {
-      id: uid(), name: ab.name + ' copy', x: ab.x + 60, y: ab.y + 60,
-      guides: ab.guides.map(g => Object.assign({}, g, { id: uid(), locked: false }))
-    }));
-    state.artboards.push(copy);
-    selectedId = copy.id;
-    noteSelection(copy.id);
-    Sound.play('create');
-    toast(copy.name + ' created', 'success');
-    renderWorld(); syncInspector(); syncGuides(); persist();
-  }
-  function deleteSelected() {
-    const ab = selAb();
-    if (!ab) { toast('Select an artboard first'); return; }
-    if (state.artboards.length <= 1) { toast('Keep at least one artboard', 'error'); Sound.play('error'); return; }
-    pushUndo();
-    state.artboards = state.artboards.filter(a => a.id !== ab.id);
-    selectedId = state.artboards[0].id;
-    noteSelection(selectedId);
-    Sound.play('remove');
-    toast(ab.name + ' deleted');
-    renderWorld(); syncInspector(); syncGuides(); persist();
-  }
   function toggleFocus() {
     const ab = selAb();
     if (!ab) { toast('Select an artboard first'); return; }
@@ -748,42 +819,6 @@
     if (on) { fitSelected(); Sound.play('toggleOn'); toast('Focus mode — press F to exit'); }
     else { Sound.play('toggleOff'); }
   }
-  function compareMode() {
-    const ids = lastSelIds.filter(id => state.artboards.find(a => a.id === id));
-    if (ids.length < 2) { toast('Select two artboards first (click them one by one)', 'error'); Sound.play('error'); return; }
-    const [a, b] = ids.map(id => state.artboards.find(x => x.id === id));
-    const gap = 120;
-    const total = a.w + gap + b.w;
-    const maxH = Math.max(a.h, b.h);
-    pushUndo();
-    a.x = -total / 2; a.y = -maxH / 2;
-    b.x = -total / 2 + a.w + gap; b.y = -maxH / 2;
-    selectedId = a.id;
-    renderWorld(); syncInspector(); syncGuides();
-    fitBounds({ x: a.x, y: a.y, w: total, h: maxH }, 160);
-    vp.classList.remove('focusing');
-    Sound.play('nav');
-    toast('Compare: ' + a.name + ' ↔ ' + b.name, 'success');
-  }
-  function autoArrange() {
-    if (state.artboards.length < 2) { fitAll(); return; }
-    pushUndo();
-    const sorted = [...state.artboards].sort((p, q) => (q.w * q.h) - (p.w * p.h));
-    const rowW = 4200;
-    let x = 0, y = 0, rowH = 0;
-    sorted.forEach(a => {
-      if (x + a.w > rowW && x > 0) { x = 0; y += rowH + 140; rowH = 0; }
-      a.x = x; a.y = y;
-      x += a.w + 140;
-      rowH = Math.max(rowH, a.h);
-    });
-    renderWorld();
-    fitAll();
-    Sound.play('generate');
-    toast('Artboards arranged', 'success');
-    persist();
-  }
-
   /* ============================================================= INSPECTOR */
   const insp = {}; // element cache
   function cacheInspector() {
@@ -1229,9 +1264,8 @@
   /* =============================================================== TOOLBAR */
   function bindToolbar() {
     const on = (id, fn) => { const el = $('#' + id); el && el.addEventListener('click', fn); };
-    on('tbNew', () => createArtboard());
-    on('tbDup', duplicateSelected);
-    on('tbDel', deleteSelected);
+    // Single-artboard workspace: creation, duplication and deletion controls
+    // are intentionally not bound. The active artboard can always be resized.
     on('tbUndo', undo);
     on('tbSnap', () => {
       state.snap = !state.snap;
@@ -1242,7 +1276,6 @@
     });
     on('tbFitAll', () => { fitAll(); Sound.play('zoom'); });
     on('tbFocus', toggleFocus);
-    on('tbCompare', compareMode);
     on('tbZoomOut', () => zoomAt(vp.clientWidth / 2, vp.clientHeight / 2, .8));
     on('tbZoomIn', () => zoomAt(vp.clientWidth / 2, vp.clientHeight / 2, 1.25));
     on('tbMini', () => {
@@ -1295,9 +1328,7 @@
       const ab = state.artboards.find(a => a.id === el.dataset.id);
       if (!ab) return;
       const act = btn.dataset.act;
-      if (act === 'dup') { selectedId = ab.id; duplicateSelected(); }
-      else if (act === 'del') { selectedId = ab.id; deleteSelected(); }
-      else if (act === 'rename') startRename(ab);
+      if (act === 'rename') startRename(ab);
     });
     world.addEventListener('dblclick', e => {
       const nameEl = e.target.closest('.ab-name');
@@ -1389,9 +1420,11 @@
     const seed = window.LISTO.studioSeed;
     if (seed && Array.isArray(seed.artboards)) {
       window.LISTO.studioSeed = null;
-      state = { camera: { x: -160, y: -160, zoom: .3 }, snap: true, minimap: true, artboards: seed.artboards.map(a => mkArtboard(a)) };
+      state = { camera: { x: -160, y: -160, zoom: .3 }, snap: true, minimap: true, artboards: seed.artboards.slice(0, 1).map(a => mkArtboard(a)) };
     }
-    if (!selectedId && state.artboards.length) { selectedId = state.artboards[0].id; noteSelection(selectedId); }
+    if (!selectedId && state.artboards.length) selectedId = state.artboards[0].id;
+    // Adopt the shared project's artboard dimensions (never its guide params).
+    applyProject(Project.get().composition, { guides: false, select: true });
     renderWorld();
     applyTransform();
     requestAnimationFrame(() => { fitAll(); });
@@ -1404,6 +1437,18 @@
       $('#tbInsp') && $('#tbInsp').setAttribute('aria-pressed', 'true');
     }
   }
+
+  document.addEventListener('listo:project', e => {
+    const detail = e.detail || {};
+    if (!detail.project || detail.source === 'studio') return;
+    const patch = detail.patch && detail.patch.composition;
+    const full = detail.source === 'open' || detail.source === 'reset';
+    if (!patch && !full) return;
+    applyProject(detail.project.composition, {
+      guides: full || !!(patch && Object.prototype.hasOwnProperty.call(patch, 'guides')),
+      select: full
+    });
+  });
 
   Router.register('studio', { init });
   window.addEventListener('resize', () => {

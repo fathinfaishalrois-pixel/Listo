@@ -1,0 +1,107 @@
+/* LISTO. — Beginner-friendly UX refinements.
+   Keeps the existing Aurora / Liquid Glass material language. */
+.ux-guide-trigger {
+  position: fixed;
+  z-index: 80;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 0 15px 0 10px;
+  border: 1px solid rgba(206, 190, 255, .25);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(17, 19, 39, .72);
+  box-shadow: 0 10px 35px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.16);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  font: 600 11px 'DM Sans', sans-serif;
+  letter-spacing: .2px;
+  cursor: pointer;
+  transition: transform .25s var(--ease), border-color .25s, background .25s;
+}
+.ux-guide-trigger:hover { transform: translateY(-2px); border-color: rgba(189,171,255,.6); background: rgba(32,28,62,.82); }
+.ux-guide-trigger > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(135deg, #725ce8, #b17cf4);
+  box-shadow: 0 0 18px rgba(139,92,246,.32);
+  font: 700 13px Manrope, sans-serif;
+}
+body.light .ux-guide-trigger { background: rgba(255,255,255,.78); color: #20213b; }
+
+.ux-guide-backdrop {
+  position: fixed;
+  z-index: 200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 5, 15, .64);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.ux-guide-backdrop[hidden] { display: none !important; }
+.ux-guide-card {
+  width: min(100%, 540px);
+  overflow: hidden;
+  border: 1px solid rgba(210,196,255,.24);
+  border-radius: 26px;
+  padding: 22px;
+  background:
+    radial-gradient(100% 90% at 100% 0%, rgba(125,91,238,.2), transparent 65%),
+    linear-gradient(145deg, rgba(27,29,55,.94), rgba(12,14,29,.96));
+  box-shadow: 0 30px 100px rgba(0,0,0,.52), inset 0 1px 0 rgba(255,255,255,.14);
+  animation: uxGuideIn .38s var(--ease) both;
+}
+body.light .ux-guide-card {
+  background:
+    radial-gradient(100% 90% at 100% 0%, rgba(125,91,238,.12), transparent 65%),
+    rgba(248,248,255,.96);
+}
+@keyframes uxGuideIn { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: none; } }
+.ux-guide-top, .ux-guide-footer, .ux-guide-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ux-guide-brand { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font: 500 9px 'DM Mono', monospace; letter-spacing: 1.3px; }
+.ux-guide-mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 9px; color: white; font: 800 12px Manrope; background: linear-gradient(135deg,#6655d8,#b57af0); }
+.ux-guide-close { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; color: var(--text); background: rgba(255,255,255,.05); font-size: 20px; cursor: pointer; }
+.ux-guide-progress { height: 3px; margin: 20px 0 26px; border-radius: 5px; background: rgba(255,255,255,.1); overflow: hidden; }
+.ux-guide-progress i { display: block; width: 20%; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#7b66ed,#b98cf6,#6bd9e7); transition: width .35s var(--ease); }
+.ux-guide-content { min-height: 190px; padding: 0 2px; }
+.ux-guide-eyebrow { color: var(--violet); font: 500 9px 'DM Mono', monospace; letter-spacing: 1.5px; }
+.ux-guide-content h2 { margin: 12px 0 10px; color: var(--text); font: 700 clamp(23px,4vw,31px)/1.15 Manrope,sans-serif; letter-spacing: -.8px; }
+.ux-guide-content p { max-width: 440px; margin: 0; color: var(--muted); font: 400 14px/1.8 'DM Sans',sans-serif; }
+.ux-guide-stepdots { display: flex; gap: 6px; margin-top: 25px; }
+.ux-guide-stepdots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.2); }
+.ux-guide-stepdots i.active { width: 22px; border-radius: 6px; background: var(--violet); }
+.ux-guide-footer { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 20px; }
+.ux-guide-textbtn, .ux-guide-back { border: 0; background: transparent; color: var(--muted); font: 600 11px 'DM Sans',sans-serif; cursor: pointer; padding: 9px 4px; }
+.ux-guide-textbtn:hover, .ux-guide-back:hover { color: var(--text); }
+.ux-guide-back:disabled { opacity: .35; cursor: default; }
+.ux-guide-next { min-height: 40px; padding: 0 15px; border: 1px solid rgba(196,181,253,.3); border-radius: 12px; color: white; background: linear-gradient(120deg,#6556d8,#8a62e7); box-shadow: 0 8px 24px rgba(104,80,210,.25); font: 700 11px 'DM Sans',sans-serif; cursor: pointer; }
+.ux-guide-next:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+label:has(.ux-info) { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.ux-info { display: inline-grid; place-items: center; width: 15px; height: 15px; padding: 0; border: 1px solid rgba(189,171,255,.42); border-radius: 50%; color: var(--violet); background: rgba(139,92,246,.09); font: 700 9px 'DM Sans',sans-serif; cursor: pointer; vertical-align: middle; }
+.ux-info:hover, .ux-info[aria-expanded="true"] { color: #fff; background: rgba(139,92,246,.5); }
+.ux-info-pop { position: relative; flex-basis: 100%; max-width: 100%; margin: 4px 0 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: rgba(20,22,43,.92); box-shadow: 0 8px 25px rgba(0,0,0,.2); font: 400 11px/1.55 'DM Sans',sans-serif; }
+.ux-info-pop[hidden] { display: none; }
+body.light .ux-info-pop { color: #4d5269; background: rgba(255,255,255,.96); }
+
+@media (max-width: 640px) {
+  .ux-guide-trigger { left: 12px; bottom: max(12px, env(safe-area-inset-bottom)); min-height: 40px; }
+  .ux-guide-card { padding: 18px; border-radius: 21px; }
+  .ux-guide-content { min-height: 205px; }
+  .ux-guide-content p { font-size: 13px; }
+  .ux-guide-footer { align-items: flex-end; }
+  .ux-guide-actions { gap: 7px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ux-guide-card { animation: none; }
+  .ux-guide-progress i, .ux-guide-trigger { transition: none; }
+}

@@ -381,3 +381,23 @@ body.light .canvas-hint { background: rgba(255, 255, 255, .7); }
 @media (prefers-reduced-motion: reduce) {
   .lib-drawer, .inspector, .ref-detail { transition: none !important; }
 }
+
+/* Single-artboard resize handles */
+.ab-resize-handle {
+  position: absolute; z-index: 12; width: 12px; height: 12px;
+  border: 2px solid #0b1020; border-radius: 4px;
+  background: var(--violet); box-shadow: 0 0 0 1px rgba(255,255,255,.65), 0 2px 8px rgba(0,0,0,.35);
+  display: none; touch-action: none;
+}
+.ab.sel .ab-resize-handle { display: block; }
+.ab-resize-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.ab-resize-handle.n { left: calc(50% - 6px); top: -6px; cursor: ns-resize; }
+.ab-resize-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.ab-resize-handle.e { right: -6px; top: calc(50% - 6px); cursor: ew-resize; }
+.ab-resize-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.ab-resize-handle.s { left: calc(50% - 6px); bottom: -6px; cursor: ns-resize; }
+.ab-resize-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.ab-resize-handle.w { left: -6px; top: calc(50% - 6px); cursor: ew-resize; }
+.canvas-viewport.resizing-ab { cursor: nwse-resize; }
+.ab-resize-handle { padding: 0; appearance: none; -webkit-appearance: none; }
+.ab-resize-handle:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
