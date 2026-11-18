@@ -1,0 +1,13 @@
+# Vercel local project metadata
+.vercel
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Safety net: this project is dependency-free and must stay build-free
+node_modules/
